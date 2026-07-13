@@ -46,7 +46,7 @@ class TestIsModelCard:
 
 
 class TestIsPrefillCard:
-    # The prefill role is carried by the card's `worker_type` field.
+    # Prefer worker_type; fall back to legacy ModelType::Prefill when absent.
 
     def test_worker_type_prefill(self):
         assert is_prefill_card({"worker_type": "prefill"})
@@ -64,9 +64,30 @@ class TestIsPrefillCard:
     def test_missing_worker_type_defaults_to_not_prefill(self):
         assert not is_prefill_card({})
 
-    def test_null_worker_type_is_not_prefill(self):
+    def test_null_worker_type_without_model_type_is_not_prefill(self):
         # A missing/legacy card serializes worker_type as null -> Python None.
         assert not is_prefill_card({"worker_type": None})
+
+    def test_legacy_model_type_string_prefill(self):
+        assert is_prefill_card({"model_type": "Prefill"})
+        assert is_prefill_card({"worker_type": None, "model_type": "Prefill"})
+
+    def test_legacy_model_type_bitflag_prefill(self):
+        assert is_prefill_card({"model_type": 0x10})
+        assert is_prefill_card({"model_type": {"bits": 0x10}})
+
+    def test_legacy_model_type_chat_is_not_prefill(self):
+        assert not is_prefill_card({"model_type": "Chat | Completions"})
+        assert not is_prefill_card({"model_type": 2})
+
+    def test_worker_type_wins_over_legacy_model_type(self):
+        # Explicit decode role must not be reclassified via ModelType::Prefill.
+        assert not is_prefill_card(
+            {"worker_type": "decode", "model_type": "Prefill"}
+        )
+        assert is_prefill_card(
+            {"worker_type": "prefill", "model_type": "Chat | Completions"}
+        )
 
 
 # ── worker_info_from_mdc ──────────────────────────────────────────

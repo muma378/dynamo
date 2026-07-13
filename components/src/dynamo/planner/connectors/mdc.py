@@ -25,6 +25,11 @@ from dynamo.planner.monitoring.worker_info import (
 
 logger = logging.getLogger(__name__)
 
+# ModelType::Prefill bit in ModelDeploymentCard::model_type (bitflags: 1 << 4).
+# Used only when ``worker_type`` is absent — same cross-version policy as
+# frontend ``effective_worker_type`` in lib/llm/src/discovery/watcher.rs.
+_MODEL_TYPE_PREFILL_BIT = 0x10
+
 
 @dataclass
 class MdcEntry:
@@ -58,16 +63,36 @@ def is_model_card(wrapper: dict) -> bool:
     return wrapper.get("type") == "Model"
 
 
+def _legacy_model_type_is_prefill(model_type: Any) -> bool:
+    """Interpret the legacy ``ModelType::Prefill`` marker on old worker cards.
+
+    ``model_type`` can be serialized three ways depending on the producer:
+    an integer bitflag, a serde-bitflags dict with a ``bits`` key, or a
+    human-readable string (e.g. ``"Prefill"`` / ``"Chat|Completions"``).
+    """
+    if isinstance(model_type, str):
+        return "prefill" in model_type.lower()
+    if isinstance(model_type, dict):
+        model_type = model_type.get("bits", 0)
+    try:
+        return bool(int(model_type) & _MODEL_TYPE_PREFILL_BIT)
+    except (TypeError, ValueError):
+        return False
+
+
 def is_prefill_card(card_json: dict) -> bool:
     """Whether a card_json belongs to a prefill worker.
 
-    The prefill role is carried on the card's ``worker_type`` field
-    (serialized as the lowercase string ``"prefill"``).
+    Prefer ``worker_type`` (canonical after #9815; serialized as the
+    lowercase string ``"prefill"``). When ``worker_type`` is missing or
+    null, fall back to the legacy ``ModelType::Prefill`` marker so a new
+    planner can classify old workers (e.g. mocker v1.2.1) during
+    cross-version rollouts — mirroring frontend ``effective_worker_type``.
     """
     worker_type: Any = card_json.get("worker_type")
     if isinstance(worker_type, str):
         return worker_type.lower() == "prefill"
-    return False
+    return _legacy_model_type_is_prefill(card_json.get("model_type", 0))
 
 
 def select_entry(
