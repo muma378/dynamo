@@ -697,6 +697,9 @@ pub fn make_engine<'p>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         if let Some(model_path) = args.model_path.clone() {
             let local_path = if model_path.exists() {
+                // Local checkout: record it as source_path so display_name
+                // from --model-name does not become the Hub download id.
+                builder.source_path(model_path.clone());
                 model_path
             } else {
                 // Mocker only needs tokenizer, not weights

@@ -721,7 +721,19 @@ fn checked_file_uri(
     };
 
     match url.scheme() {
-        "http" | "https" | "hf" => Ok(url.to_string()),
+        "http" | "https" => Ok(url.to_string()),
+        "hf" => {
+            // Frontend `--model-path/<basename>` wins over Hub when present
+            // (offline / private checkout). Missing basename keeps hf://.
+            if let Some(prefix) = local_model_path {
+                let filename = uri_basename(url.as_str())?;
+                let local = prefix.join(&filename);
+                if local.exists() {
+                    return file_uri_for(&local);
+                }
+            }
+            Ok(url.to_string())
+        }
         "file" => {
             // worker location → --model-path → hf://. Basename + checksum preserved.
             // is_custom slots aren't published on HF, so rung 4 errors instead.
@@ -1444,8 +1456,9 @@ impl ModelDeploymentCard {
 
     /// Resolve every metadata `CheckedFile` through the cache: fetch,
     /// blake3-verify, content-address. `local_model_path` (frontend's
-    /// `--model-path`) supplies a fallback directory for `file://`
-    /// slots whose worker-published location is unreachable.
+    /// `--model-path`) overlays both unreachable `file://` slots and
+    /// `hf://` slots when the basename exists locally; otherwise `hf://`
+    /// still falls through to Hub.
     pub async fn download_config(&mut self, local_model_path: Option<&Path>) -> anyhow::Result<()> {
         // TensorBased models don't use metadata files — backend handles
         // everything.
@@ -2587,6 +2600,38 @@ mod tests {
             got,
             url::Url::from_file_path(&local_cfg).unwrap().to_string()
         );
+    }
+
+    /// Frontend `--model-path` overlays worker-published `hf://` slots when
+    /// the basename exists locally (offline / private checkout).
+    #[test]
+    fn checked_file_uri_overlays_hf_with_local_model_path() {
+        let local = tempfile::tempdir().unwrap();
+        let local_cfg = local.path().join("config.json");
+        std::fs::write(&local_cfg, b"").unwrap();
+
+        let got = super::checked_file_uri(
+            &cf_for("hf://org/Model/config.json"),
+            "org/Model",
+            Some(local.path()),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            url::Url::from_file_path(&local_cfg).unwrap().to_string()
+        );
+
+        // Basename missing under --model-path → keep hf:// for Hub fallback.
+        let empty = tempfile::tempdir().unwrap();
+        let kept = super::checked_file_uri(
+            &cf_for("hf://org/Model/config.json"),
+            "org/Model",
+            Some(empty.path()),
+            false,
+        )
+        .unwrap();
+        assert_eq!(kept, "hf://org/Model/config.json");
     }
 
     #[test]

@@ -373,12 +373,15 @@ impl LocalModelBuilder {
 
         let mut card =
             ModelDeploymentCard::load_from_disk(&model_path, self.custom_template_path.as_deref())?;
-        // Source path is the `--model-path` the user passed. By now our `model_path` is the local
-        // path of the downloaded model.
+        // Prefer an explicit CLI source (HF id or original path). If unset,
+        // keep the on-disk checkout as source_path so --model-name (API id)
+        // does not become the download identity via source_path() fallback.
         if let Some(source_path) = self.source_path.take() {
             card.set_source_path(source_path);
+        } else {
+            card.set_source_path(model_path.clone());
         }
-        // The served model name defaults to the full model path.
+        // The served model name defaults to the source path.
         // This matches what vllm and sglang do.
         let alt = card.source_path().to_string();
         card.set_name(self.model_name.as_deref().unwrap_or(&alt));
@@ -870,6 +873,29 @@ mod env_self_host_metadata_tests {
         for v in ["1", "true", "TRUE", "yes", "Yes", "on", "ON"] {
             assert!(self_host_metadata_default(Some(v)), "expected ON for {v:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod local_model_builder_source_path_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn keeps_local_source_path_when_model_name_is_hf_id() {
+        let model_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/sample-models/TinyLlama_v1.1");
+        let mut builder = LocalModelBuilder::default();
+        builder
+            .model_path(model_dir.clone())
+            .model_name(Some("org/Model".to_string()));
+        let local = builder.build().await.unwrap();
+        assert_eq!(local.display_name(), "org/Model");
+        let source = std::fs::canonicalize(&model_dir).unwrap();
+        assert_eq!(
+            PathBuf::from(local.card().source_path()),
+            source,
+            "source_path must stay the on-disk checkout, not the API name"
+        );
     }
 }
 
