@@ -762,7 +762,12 @@ func dgdrHubOnlyProfilingJob(src *batchv1.JobSpec) *batchv1.JobSpec {
 	save := src.DeepCopy()
 	if idx := dgdrProfilerContainerIndex(save.Template.Spec.Containers); idx >= 0 {
 		save.Template.Spec.Containers[idx].Resources = corev1.ResourceRequirements{}
-		if apiequality.Semantic.DeepEqual(save.Template.Spec.Containers[idx], corev1.Container{}) {
+		// A container that only carries the synthetic profiler name (from
+		// projecting v1alpha1 profilingConfig.resources) is not hub-only
+		// state — treat it as empty so spoke→hub does not emit dgdr-spec.
+		c := save.Template.Spec.Containers[idx]
+		if apiequality.Semantic.DeepEqual(c, corev1.Container{}) ||
+			apiequality.Semantic.DeepEqual(c, corev1.Container{Name: dgdrProfilerContainerName}) {
 			save.Template.Spec.Containers = slices.Delete(save.Template.Spec.Containers, idx, idx+1)
 		}
 	}
